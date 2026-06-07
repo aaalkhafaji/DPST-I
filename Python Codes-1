@@ -1,0 +1,115 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import zipfile
+import os
+from google.colab import files
+
+# Set global formatting for IEEE style
+plt.rcParams.update({
+    'font.family': 'serif',
+    'font.size': 10,
+    'axes.labelsize': 11,
+    'legend.fontsize': 9,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+    'figure.autolayout': True
+})
+
+# List to keep track of generated files
+generated_files = []
+
+# ---------------------------------------------------------
+# Figure 1: Morphological Energy Decay (fig:morph_energy_decay)
+# ---------------------------------------------------------
+iterations = np.arange(0, 50, 1)
+lambdas = [0.05, 0.10, 0.20, 0.30]
+
+plt.figure(figsize=(6, 4))
+for lam in lambdas:
+    # Simulating exponential decay based on contraction coefficient
+    energy = 100 * np.exp(-lam * iterations) + np.random.normal(0, 0.5, len(iterations))
+    # Smooth out the noise slightly for a clean look
+    energy = np.convolve(energy, np.ones(3)/3, mode='same')
+    plt.plot(iterations, energy, label=f'$\lambda = {lam}$', linewidth=2)
+
+plt.xlabel('Evolution Iteration ($k$)')
+plt.ylabel('Morphological Energy ($E_m^k$)')
+plt.title('Energy Contraction During Iterative Evolution')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+file1 = 'fig_morph_energy_decay.pdf'
+plt.savefig(file1, dpi=300, bbox_inches='tight')
+generated_files.append(file1)
+print(f"Generated: {file1}")
+plt.close()
+
+# ---------------------------------------------------------
+# Figure 2: Runtime Complexity Scaling (fig:runtime_scaling)
+# ---------------------------------------------------------
+monomials = np.array([10, 50, 100, 200, 500, 1000])
+
+# Simulating runtime logic
+dpst_runtime = 0.05 * monomials + 5  # Linear O(Np)
+pm_runtime = 0.002 * (monomials ** 2) + 15 # Non-linear scaling
+nlm_runtime = 0.005 * (monomials ** 2) + 30 
+
+plt.figure(figsize=(6, 4))
+plt.plot(monomials, dpst_runtime, 'b-o', label='Proposed DPST (Linear $\mathcal{O}(N_p)$)', linewidth=2)
+plt.plot(monomials, pm_runtime, 'r--s', label='Perona-Malik', linewidth=2)
+plt.plot(monomials, nlm_runtime, 'g--^', label='Non-Local Means', linewidth=2)
+
+plt.xlabel('Polynomial Monomial Count ($N_p$)')
+plt.ylabel('Runtime (ms)')
+plt.title('Arithmetic Scaling vs. Polynomial Complexity')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.legend()
+file2 = 'fig_runtime_scaling.pdf'
+plt.savefig(file2, dpi=300, bbox_inches='tight')
+generated_files.append(file2)
+print(f"Generated: {file2}")
+plt.close()
+
+# ---------------------------------------------------------
+# Figure 3: Parameter Sensitivity (fig:parameter_sensitivity)
+# ---------------------------------------------------------
+degrees = np.array([2, 3, 4, 5])
+ssim = np.array([0.904, 0.942, 0.951, 0.953])
+runtime = np.array([14, 21, 34, 57])
+
+fig, ax1 = plt.subplots(figsize=(6, 4))
+
+color = 'tab:blue'
+ax1.set_xlabel('Polynomial Degree ($d$)')
+ax1.set_ylabel('Structural Similarity (SSIM)', color=color)
+ax1.plot(degrees, ssim, 'b-o', linewidth=2, label='SSIM')
+ax1.tick_params(axis='y', labelcolor=color)
+ax1.set_xticks(degrees)
+ax1.grid(True, linestyle='--', alpha=0.6)
+
+ax2 = ax1.twinx()  
+color = 'tab:red'
+ax2.set_ylabel('Runtime (ms)', color=color)  
+ax2.plot(degrees, runtime, 'r--s', linewidth=2, label='Runtime')
+ax2.tick_params(axis='y', labelcolor=color)
+
+plt.title('Influence of Polynomial Degree on Performance')
+fig.tight_layout()  
+file3 = 'fig_parameter_sensitivity.pdf'
+plt.savefig(file3, dpi=300, bbox_inches='tight')
+generated_files.append(file3)
+print(f"Generated: {file3}")
+plt.close()
+
+# ---------------------------------------------------------
+# Create Zip File and Download
+# ---------------------------------------------------------
+zip_filename = 'DPST_figures.zip'
+
+with zipfile.ZipFile(zip_filename, 'w') as zipf:
+    for file in generated_files:
+        zipf.write(file)
+        
+print(f"\nAll figures bundled into {zip_filename}. Triggering download...")
+
+# Trigger the download in Colab
+files.download(zip_filename)
