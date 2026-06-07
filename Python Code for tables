@@ -1,0 +1,86 @@
+import os
+import zipfile
+from google.colab import files
+
+# ==========================================
+# 1. INPUT YOUR DATA HERE
+# ==========================================
+
+# FPGA Resource Scaling
+fpga_scaling_data = [
+    {"deg": 2, "luts": 342, "ffs": 210, "dsp": 4, "lat": 3},
+    {"deg": 3, "luts": 412, "ffs": 286, "dsp": 8, "lat": 3},
+    {"deg": 4, "luts": 580, "ffs": 450, "dsp": 12, "lat": 3},
+    {"deg": 5, "luts": 765, "ffs": 620, "dsp": 16, "lat": 3}
+]
+
+# Structural Preservation Performance
+spr_performance_data = [
+    {"method": "Median Filter", "psnr": 28.12, "ssim": 0.82, "epi": 0.71, "spr": 0.95},
+    {"method": "Wiener Filter", "psnr": 29.50, "ssim": 0.85, "epi": 0.78, "spr": 0.97},
+    {"method": "BM3D", "psnr": 30.85, "ssim": 0.92, "epi": 0.89, "spr": 1.01},
+    {"method": "DnCNN", "psnr": 32.11, "ssim": 0.96, "epi": 0.92, "spr": 1.03},
+    {"method": "Proposed DPST", "psnr": 31.42, "ssim": 0.94, "epi": 0.91, "spr": 1.00}
+]
+
+# Ablation Study
+ablation_data = [
+    {"config": "DPST Only", "psnr": 30.12, "ssim": 0.904, "epi": 0.88, "spr": 0.96},
+    {"config": "DPST + Morph", "psnr": 31.10, "ssim": 0.935, "epi": 0.90, "spr": 0.99},
+    {"config": "Full Framework", "psnr": 31.42, "ssim": 0.942, "epi": 0.91, "spr": 1.00}
+]
+
+# Sensitivity Analysis
+sensitivity_data = [
+    {"size": "3 $\\times$ 3", "psnr": 31.42, "ssim": 0.942, "epi": 0.914, "spr": 0.99, "time": 21},
+    {"size": "5 $\\times$ 5", "psnr": 31.55, "ssim": 0.945, "epi": 0.918, "spr": 1.00, "time": 25},
+    {"size": "7 $\\times$ 7", "psnr": 31.61, "ssim": 0.946, "epi": 0.920, "spr": 1.01, "time": 30}
+]
+
+# ==========================================
+# 2. GENERATE LATEX BLOCKS
+# ==========================================
+
+os.makedirs('tables', exist_ok=True)
+
+# FPGA Table
+with open('tables/fpga_scaling.tex', 'w') as f:
+    f.write(r"\begin{tabular}{c c c c c}" + "\n\hline\hline\n")
+    f.write(r"\textbf{Poly. Degree} & \textbf{LUTs} & \textbf{FFs} & \textbf{DSP Blocks} & \textbf{Latency (Cycles)} \\" + "\n\hline\n")
+    for row in fpga_scaling_data:
+        f.write(f"{row['deg']} & {row['luts']} & {row['ffs']} & {row['dsp']} & {row['lat']} \\\\\n")
+    f.write(r"\hline\hline" + "\n\end{tabular}")
+
+# SPR Table
+with open('tables/spr_performance.tex', 'w') as f:
+    f.write(r"\begin{tabular}{l c c c c}" + "\n\hline\hline\n")
+    f.write(r"\textbf{Method} & \textbf{PSNR} & \textbf{SSIM} & \textbf{EPI} & \textbf{SPR} \\" + "\n\hline\n")
+    for row in spr_performance_data:
+        f.write(f"{row['method']} & {row['psnr']} & {row['ssim']} & {row['epi']} & {row['spr']} \\\\\n")
+    f.write(r"\hline\hline" + "\n\end{tabular}")
+
+# Ablation Table
+with open('tables/ablation_study.tex', 'w') as f:
+    f.write(r"\begin{tabular}{l c c c c}" + "\n\hline\hline\n")
+    f.write(r"\textbf{Configuration} & \textbf{PSNR} & \textbf{SSIM} & \textbf{EPI} & \textbf{SPR} \\" + "\n\hline\n")
+    for row in ablation_data:
+        f.write(f"{row['config']} & {row['psnr']} & {row['ssim']} & {row['epi']} & {row['spr']} \\\\\n")
+    f.write(r"\hline\hline" + "\n\end{tabular}")
+
+# Sensitivity Table
+with open('tables/struct_element_sensitivity.tex', 'w') as f:
+    f.write(r"\begin{tabular}{l c c c c c}" + "\n\hline\hline\n")
+    f.write(r"\textbf{Structuring Element} & \textbf{PSNR (dB)} & \textbf{SSIM} & \textbf{EPI} & \textbf{SPR} & \textbf{Runtime (ms)} \\" + "\n\hline\n")
+    for row in sensitivity_data:
+        f.write(f"{row['size']} & {row['psnr']} & {row['ssim']} & {row['epi']} & {row['spr']} & {row['time']} \\\\\n")
+    f.write(r"\hline\hline" + "\n\end{tabular}")
+
+# ==========================================
+# 3. ZIP AND DOWNLOAD
+# ==========================================
+
+with zipfile.ZipFile('missing_tables.zip', 'w') as zipf:
+    for file in os.listdir('tables'):
+        zipf.write(os.path.join('tables', file), arcname=file)
+
+files.download('missing_tables.zip')
