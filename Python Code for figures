@@ -1,0 +1,247 @@
+# ==============================================================================
+# DPST Framework: Mathematical Benchmarking and Figure Generation for Colab
+# ==============================================================================
+
+import os
+import time
+import shutil
+import urllib.request
+import numpy as np
+import matplotlib.pyplot as plt
+import scipy.ndimage as ndimage
+import cv2
+from skimage import metrics, color, img_as_float
+from skimage.restoration import denoise_nl_means, estimate_sigma, denoise_wavelet
+from google.colab import files
+
+# --- 1. Setup & Directory Initialization ---
+OUTPUT_DIR = "/content/DPST_Results"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Math/Algorithm Parameters
+IMAGE_SIZE = 512 # Set to 1024 for final rigorous benchmarks; 512 for faster Colab testing
+LAMBDA_VALS = [0.05, 0.10, 0.20, 0.30]
+ITERATIONS = 15
+
+# --- 2. Helper Functions (Data & Noise) ---
+def download_test_image():
+    """Downloads a standard test image (Lena) with User-Agent to bypass 403 Forbidden."""
+    url = "https://upload.wikimedia.org/wikipedia/en/7/7d/Lenna_%28test_image%29.png"
+    filepath = "lena.png"
+    try:
+        if not os.path.exists(filepath):
+            # Inject a web-browser User-Agent header so Wikimedia doesn't block the Python script
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req) as response, open(filepath, 'wb') as out_file:
+                out_file.write(response.read())
+        img = cv2.imread(filepath)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    except Exception as e:
+        print(f"Download blocked ({e}). Falling back to built-in Skimage standard test image.")
+        from skimage import data
+        img = data.astronaut() # Highly detailed built-in RGB test image
+        
+    img = cv2.resize(img, (IMAGE_SIZE, IMAGE_SIZE))
+    return img_as_float(img)
+
+def add_awgn(image, sigma=25):
+    """Adds AWGN to the normalized image."""
+    noise = np.random.normal(0, sigma / 255.0, image.shape)
+    noisy_img = np.clip(image + noise, 0.0, 1.0)
+    return noisy_img
+
+# --- 3. Custom Evaluation Metrics (EPI, GME, SPR) ---
+def compute_gradients(image):
+    """Computes the spatial gradient magnitude of an image using Sobel operators."""
+    if len(image.shape) == 3:
+        image = color.rgb2gray(image)
+    grad_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+    return np.sqrt(grad_x**2 + grad_y**2)
+
+def eval_metrics(clean, noisy, restored):
+    """Calculates PSNR, SSIM, EPI, GME, and SPR."""
+    psnr_val = metrics.peak_signal_noise_ratio(clean, restored, data_range=1.0)
+    ssim_val = metrics.structural_similarity(clean, restored, data_range=1.0, channel_axis=-1)
+    
+    grad_clean = compute_gradients(clean)
+    grad_noisy = compute_gradients(noisy)
+    grad_restored = compute_gradients(restored)
+    
+    # EPI: Edge Preservation Index
+    epi = np.sum(grad_restored) / (np.sum(grad_clean) + 1e-8)
+    # GME: Gradient Magnitude Error
+    gme = np.mean(np.abs(grad_restored - grad_clean))
+    # SPR: Structural Preservation Ratio
+    spr = np.sum(grad_restored) / (np.sum(grad_noisy) + 1e-8)
+    
+    return psnr_val, ssim_val, epi, gme, spr
+
+# --- 4. The DPST Mathematical Framework ---
+class DPST_Framework:
+    def __init__(self, t_step=0.1):
+        self.t_step = t_step
+        self.footprint = np.ones((3, 3)) # 3x3 structuring element
+        
+    def forward_transform(self, x, t):
+        """Eq. 17: Forward Triangular Polynomial Automorphism across RGB channels."""
+        y = np.zeros_like(x)
+        y[:,:,2] = x[:,:,2] + self.t_step * t  # B channel
+        y[:,:,1] = x[:,:,1] + 4 * (x[:,:,2]**2) # G channel
+        y[:,:,0] = x[:,:,0] + 3 * (x[:,:,1]**2) + 2 * x[:,:,2] # R channel
+        return y
+        
+    def inverse_transform(self, y, t):
+        """Eq. 18-20: Exact Backward Substitution (Division-Free)."""
+        x_rec = np.zeros_like(y)
+        x_rec[:,:,2] = y[:,:,2] - self.t_step * t
+        x_rec[:,:,1] = y[:,:,1] - 4 * (x_rec[:,:,2]**2)
+        x_rec[:,:,0] = y[:,:,0] - 3 * (x_rec[:,:,1]**2) - 2 * x_rec[:,:,2]
+        return np.clip(x_rec, 0.0, 1.0)
+
+    def morph_variation(self, y_channel):
+        """Dm = Dilation - Erosion"""
+        dilated = ndimage.grey_dilation(y_channel, footprint=self.footprint)
+        eroded = ndimage.grey_erosion(y_channel, footprint=self.footprint)
+        return dilated - eroded
+
+    def restore(self, image, lam, iterations):
+        """Full DPST Evolution Pipeline."""
+        start_time = time.time()
+        Y = self.forward_transform(image, t=1.0)
+        
+        energy_history = []
+        for k in range(iterations):
+            total_energy = 0
+            for c in range(3): # Process each channel independently
+                Dm = self.morph_variation(Y[:,:,c])
+                total_energy += np.mean(np.abs(Dm))
+                # Polynomial Flow Update
+                Y[:,:,c] = Y[:,:,c] - self.t_step * lam * Dm
+            energy_history.append(total_energy / 3.0)
+            
+        restored = self.inverse_transform(Y, t=1.0)
+        runtime = (time.time() - start_time) * 1000 # ms
+        return restored, energy_history, runtime
+
+# --- 5. Execution & Data Gathering ---
+print("Initializing DPST Framework and loading datasets...")
+clean_img = download_test_image()
+noisy_img = add_awgn(clean_img, sigma=25)
+
+dpst = DPST_Framework()
+
+# A. Morphological Energy Decay Data
+print("Simulating Morphological Energy Decay...")
+energy_curves = {}
+for lam in LAMBDA_VALS:
+    _, energies, _ = dpst.restore(noisy_img, lam=lam, iterations=ITERATIONS)
+    energy_curves[lam] = energies
+
+# B. Baseline Comparisons
+print("Running comparative algorithms (Gaussian, Bilateral, NLM, DPST)...")
+results = {}
+
+# Gaussian
+t0 = time.time()
+restored_gauss = cv2.GaussianBlur(noisy_img, (5, 5), 1.2)
+t_gauss = (time.time() - t0) * 1000
+
+# Bilateral
+t0 = time.time()
+restored_bilateral = cv2.bilateralFilter((noisy_img*255).astype(np.float32), 9, 75, 75) / 255.0
+t_bilat = (time.time() - t0) * 1000
+
+# NLM
+t0 = time.time()
+sigma_est = np.mean(estimate_sigma(noisy_img, channel_axis=-1))
+restored_nlm = denoise_nl_means(noisy_img, h=0.8 * sigma_est, fast_mode=True, 
+                                patch_size=5, patch_distance=6, channel_axis=-1)
+t_nlm = (time.time() - t0) * 1000
+
+# DPST (Best Parameter)
+restored_dpst, _, t_dpst = dpst.restore(noisy_img, lam=0.20, iterations=10)
+
+# C. Calculate all metrics
+print("Computing structural metrics (EPI, GME, SPR)...")
+metrics_data = {
+    "Gaussian": eval_metrics(clean_img, noisy_img, restored_gauss) + (t_gauss,),
+    "Bilateral": eval_metrics(clean_img, noisy_img, restored_bilateral) + (t_bilat,),
+    "NLM": eval_metrics(clean_img, noisy_img, restored_nlm) + (t_nlm,),
+    "DPST": eval_metrics(clean_img, noisy_img, restored_dpst) + (t_dpst,)
+}
+
+# --- 6. Figure Generation (IEEE Formatted) ---
+print("Generating publication-ready figures...")
+plt.style.use('seaborn-v0_8-whitegrid')
+
+# Figure 13: Morphological Energy Decay (Added "rf" to properly parse the lambda symbol)
+plt.figure(figsize=(7, 5))
+for lam, energies in energy_curves.items():
+    plt.plot(range(1, ITERATIONS + 1), energies, marker='o', linewidth=2, label=rf'$\lambda = {lam}$')
+plt.xlabel('Iteration Number $k$', fontsize=12, fontweight='bold')
+plt.ylabel('Morphological Energy $E_m^k$', fontsize=12, fontweight='bold')
+plt.title('Morphological Energy Convergence During Evolution', fontsize=14, fontweight='bold')
+plt.legend(fontsize=11)
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/fig_morph_energy_decay.pdf", dpi=300)
+plt.close()
+
+# Figure 15: Runtime Scaling Comparison (Bar Chart)
+labels = list(metrics_data.keys())
+runtimes = [metrics_data[k][5] for k in labels]
+plt.figure(figsize=(7, 5))
+bars = plt.bar(labels, runtimes, color=['#4C72B0', '#55A868', '#C44E52', '#8172B3'])
+plt.ylabel('Execution Runtime (ms)', fontsize=12, fontweight='bold')
+plt.title('Computational Complexity Comparison', fontsize=14, fontweight='bold')
+for bar in bars:
+    yval = bar.get_height()
+    plt.text(bar.get_x() + bar.get_width()/2.0, yval, f'{int(yval)} ms', va='bottom', ha='center', fontweight='bold')
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/fig_runtime_comparison.pdf", dpi=300)
+plt.close()
+
+# Figure 16: Structural Preservation Ratio (SPR)
+spr_vals = [metrics_data[k][4] for k in labels]
+plt.figure(figsize=(7, 5))
+plt.axhline(y=1.0, color='r', linestyle='--', label='Ideal Preservation (SPR=1.0)')
+plt.bar(labels, spr_vals, color='#64B5F6', edgecolor='black')
+plt.ylabel('Structural Preservation Ratio (SPR)', fontsize=12, fontweight='bold')
+plt.title('Edge and Structure Preservation Performance', fontsize=14, fontweight='bold')
+plt.ylim(0, 1.2)
+plt.legend()
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/fig_spr_comparison.pdf", dpi=300)
+plt.close()
+
+# Figure X: Visual Restoration Comparison (Added "r" to properly parse the sigma symbol)
+fig, axes = plt.subplots(1, 4, figsize=(16, 4))
+titles = ["Clean Original", r"Noisy (AWGN $\sigma=25$)", "Gaussian Filter", "Proposed DPST"]
+images = [clean_img, noisy_img, restored_gauss, restored_dpst]
+
+for ax, title, img in zip(axes, titles, images):
+    # Zoom in on a structural patch to show edge preservation
+    patch = img[200:350, 200:350, :]
+    ax.imshow(patch)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.axis('off')
+plt.tight_layout()
+plt.savefig(f"{OUTPUT_DIR}/fig_visual_comparison.png", dpi=300)
+plt.close()
+
+# --- 7. Print Terminal Data for LaTeX Tables ---
+print("\n" + "="*60)
+print(" BENCHMARK RESULTS READY FOR LATEX TABLES")
+print("="*60)
+print(f"{'Method':<12} | {'PSNR':<6} | {'SSIM':<6} | {'EPI':<6} | {'GME':<6} | {'SPR':<6} | {'Runtime'}")
+print("-" * 60)
+for method, vals in metrics_data.items():
+    print(f"{method:<12} | {vals[0]:.2f} | {vals[1]:.3f} | {vals[2]:.3f} | {vals[3]:.3f} | {vals[4]:.2f} | {int(vals[5])} ms")
+print("="*60 + "\n")
+
+# --- 8. Create ZIP Archive & Download ---
+print("Zipping figures and initiating download...")
+shutil.make_archive("/content/DPST_Figures", 'zip', OUTPUT_DIR)
+files.download("/content/DPST_Figures.zip")
+print("Process Complete. All figures have been successfully generated.")
